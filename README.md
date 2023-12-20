@@ -1,4 +1,5 @@
 # raijit
+`raijit` is CPython JIT compiler.
 
 ## TODO
 - Run [pyperformance](https://github.com/python/pyperformance).
@@ -9,6 +10,20 @@ Because all scripts in this project assume `build` as the build directory, pleas
 ```console
 $ cmake -G Ninja -S src -B build -D CMAKE_EXPORT_COMPILE_COMMANDS=1 -DCMAKE_POSITION_INDEPENDENT_CODE=ON
 $ cmake --build build
+```
+
+## How to use
+```
+$ cat id.py
+import raijit
+
+def identity(a):
+    return a
+
+raijit.enable()
+assert identity(42) == 42
+$ export PYTHONPATH=./build
+$ python3 id.py
 ```
 
 ## How to implement opcode
