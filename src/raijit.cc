@@ -204,6 +204,27 @@ PyObject *RaijitEvalFrame(PyThreadState *ts, PyFrameObject *f, int throwflag) {
         code_ptr = WritePushRax(code_ptr);
         break;
       }
+      case UNARY_NOT: {
+        code_ptr = WritePopRdi(code_ptr);
+        code_ptr = WriteMovRax(code_ptr,
+                               reinterpret_cast<uint64_t>(PyObject_Not));
+        code_ptr = WriteCallRax(code_ptr);
+        code_ptr = WritePushRax(code_ptr);
+        code_ptr = WritePop1stArg(code_ptr);
+        code_ptr =
+            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(ConvertToPyBool));
+        code_ptr = WriteCallRax(code_ptr);
+        code_ptr = WritePushRax(code_ptr);
+        break;
+      }
+      case UNARY_INVERT: {
+        code_ptr = WritePopRdi(code_ptr);
+        code_ptr = WriteMovRax(code_ptr,
+                               reinterpret_cast<uint64_t>(PyNumber_Invert));
+        code_ptr = WriteCallRax(code_ptr);
+        code_ptr = WritePushRax(code_ptr);
+        break;
+      }
       case BINARY_SUBSCR: {
         code_ptr = WritePopRsi(code_ptr);
         code_ptr = WritePopRdi(code_ptr);

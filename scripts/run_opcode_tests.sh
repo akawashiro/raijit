@@ -11,4 +11,5 @@ python3 ./opcode_tests/hello.py
 python3 ./opcode_tests/use_if.py
 
 export RAIJIT_TEST_MODE=1
+python3 ./opcode_tests/unary.py
 python3 ./opcode_tests/opcodes.py

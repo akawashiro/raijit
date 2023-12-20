@@ -23,12 +23,6 @@ def raijit_test_build_map():
 def raijit_test_map_ref_in_func():
     return {'a': 32}['a']
 
-def raijit_test_unary_pos(a):
-    return +a
-
-def raijit_test_unary_neg(a):
-    return -a
-
 def raijit_test_map_ref(d):
     return d['a']
 
@@ -157,8 +151,6 @@ assert raijit_test_rot_two() == 43
 assert raijit_test_rot_three() == 43
 assert raijit_test_build_map() == {'a': 32}
 assert raijit_test_map_ref_in_func() == 32
-assert raijit_test_unary_pos(42) == 42
-assert raijit_test_unary_neg(42) == -42
 assert raijit_test_map_ref({'a': 32}) == 32
 assert raijit_test_map_change({'a': 32}) == {'a': 33}
 assert raijit_test_local_var_map() == {'a': 32}
