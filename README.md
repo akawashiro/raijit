@@ -1,6 +1,9 @@
 # raijit
 `raijit` is CPython JIT compiler.
 
+## Note
+`raijit` is under development. Any contribution is welcome.
+
 ## TODO
 - Run [pyperformance](https://github.com/python/pyperformance).
 - You can list up all unimplemented opcodes using `./scripts/list_up_unimplmented_ops.sh`.
