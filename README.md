@@ -45,3 +45,4 @@ $ ./scripts/run_opcode_tests.sh
 - `./scripts`: All shellscripts for development
 - `./opcode_tests`: Test files
 - `./users/<YOUR GITHUB ID>`: You can put anything in this directory
+- `./ci`: All CI related files
