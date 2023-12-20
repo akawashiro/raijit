@@ -39,3 +39,9 @@ $ python3 id.py
 ```console
 $ ./scripts/run_opcode_tests.sh
 ```
+
+## Directory structure
+- `./src`: All C++ source code files
+- `./scripts`: All shellscripts for development
+- `./opcode_tests`: Test files
+- `./users/<YOUR GITHUB ID>`: You can put anything in this directory
