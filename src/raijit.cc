@@ -206,8 +206,8 @@ PyObject *RaijitEvalFrame(PyThreadState *ts, PyFrameObject *f, int throwflag) {
       }
       case UNARY_NOT: {
         code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(code_ptr,
-                               reinterpret_cast<uint64_t>(PyObject_Not));
+        code_ptr =
+            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyObject_Not));
         code_ptr = WriteCallRax(code_ptr);
         code_ptr = WritePushRax(code_ptr);
         code_ptr = WritePop1stArg(code_ptr);
@@ -219,8 +219,8 @@ PyObject *RaijitEvalFrame(PyThreadState *ts, PyFrameObject *f, int throwflag) {
       }
       case UNARY_INVERT: {
         code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(code_ptr,
-                               reinterpret_cast<uint64_t>(PyNumber_Invert));
+        code_ptr =
+            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyNumber_Invert));
         code_ptr = WriteCallRax(code_ptr);
         code_ptr = WritePushRax(code_ptr);
         break;
@@ -319,15 +319,6 @@ PyObject *RaijitEvalFrame(PyThreadState *ts, PyFrameObject *f, int throwflag) {
         }
         break;
       }
-      case LOAD_FAST: {
-        PyObject **local = &(f->f_localsplus[oprand]);
-        code_ptr = WriteMovRdi(code_ptr, reinterpret_cast<uint64_t>(local));
-        code_ptr = WriteMovToRaxFromPtrRdi(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        // Breakpoint
-        // code_ptr = WriteSoftwareBreakpoint(code_ptr);
-        break;
-      }
       case STORE_FAST: {
         // https://github.com/python/cpython/blob/6c2f34fa77f884bd79801a9ab8a117cab7d9c7ed/Python/ceval.c#L1879-L1884
         PyObject **local = &(f->f_localsplus[oprand]);
@@ -346,7 +337,7 @@ PyObject *RaijitEvalFrame(PyThreadState *ts, PyFrameObject *f, int throwflag) {
 
         for (size_t i = 0; i < oprand; i++) {
           code_ptr = WriteMovTo1stArgFromR12(code_ptr);
-          code_ptr = WriteMov2ndArgFromImm(code_ptr, oprand - i - 1);
+          code_ptr = WriteMovTo2ndArgFromImm(code_ptr, oprand - i - 1);
           code_ptr = WritePop3rdArg(code_ptr);
           code_ptr =
               WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyList_SetItem));
@@ -366,7 +357,7 @@ PyObject *RaijitEvalFrame(PyThreadState *ts, PyFrameObject *f, int throwflag) {
 
         for (size_t i = 0; i < oprand; i++) {
           code_ptr = WriteMovTo1stArgFromR12(code_ptr);
-          code_ptr = WriteMov2ndArgFromImm(code_ptr, oprand - i - 1);
+          code_ptr = WriteMovTo2ndArgFromImm(code_ptr, oprand - i - 1);
           code_ptr = WritePop3rdArg(code_ptr);
           code_ptr = WriteMovRax(code_ptr,
                                  reinterpret_cast<uint64_t>(PyTuple_SetItem));
@@ -381,6 +372,13 @@ PyObject *RaijitEvalFrame(PyThreadState *ts, PyFrameObject *f, int throwflag) {
         code_ptr =
             WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyObject_GetIter));
         code_ptr = WriteCallRax(code_ptr);
+        code_ptr = WritePushRax(code_ptr);
+        break;
+      }
+      case LOAD_FAST: {
+        PyObject **local = &(f->f_localsplus[oprand]);
+        code_ptr = WriteMovRdi(code_ptr, reinterpret_cast<uint64_t>(local));
+        code_ptr = WriteMovToRaxFromPtrRdi(code_ptr);
         code_ptr = WritePushRax(code_ptr);
         break;
       }
@@ -401,6 +399,17 @@ PyObject *RaijitEvalFrame(PyThreadState *ts, PyFrameObject *f, int throwflag) {
         code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(const_));
         code_ptr = WritePushRax(code_ptr);
         break;
+      }
+      case LOAD_METHOD: {
+        const auto name = PyTuple_GET_ITEM(f->f_code->co_names, oprand);
+        LOG(INFO) << LOG_SHOW(PyUnicode_AsUTF8(name));
+        code_ptr = WritePop1stArg(code_ptr);
+        code_ptr =
+            WriteMovTo2ndArgFromImm(code_ptr, reinterpret_cast<uint64_t>(name));
+        code_ptr =
+            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyObject_GetAttr));
+        code_ptr = WriteCallRax(code_ptr);
+        code_ptr = WritePushRax(code_ptr);
       }
       case RETURN_VALUE: {
         code_ptr = WritePopRax(code_ptr);
