@@ -13,8 +13,11 @@
 #include <object.h>
 #include <opcode.h>
 
+#include <internal/pycore_frame.h>
+
 #include <Zydis/Zydis.h>
 
+#include "ceval.h"
 #include "log.h"
 #include "opcode_table.h"
 #include "write_insts.h"
@@ -117,14 +120,21 @@ std::ostream &operator<<(std::ostream &os, const RelocPatch &patch) {
   return os;
 }
 
-PyObject *RaijitEvalFrame(PyThreadState *ts, PyFrameObject *f, int throwflag) {
-  const std::string func_name = PyUnicode_AsUTF8(f->f_code->co_name);
+PyObject *RaijitEvalFrame(PyThreadState *ts,
+                          _PyInterpreterFrame *interpreter_frame,
+                          int throwflag) {
+  PyCodeObject *code = reinterpret_cast<PyCodeObject *>(
+      PyUnstable_InterpreterFrame_GetCode(interpreter_frame));
+  PyObject *co_code = PyCode_GetCode(code);
+
+  const std::string func_name = PyUnicode_AsUTF8(code->co_name);
   if (std::getenv("RAIJIT_TEST_MODE") != NULL &&
       !func_name.starts_with("raijit_test_")) {
-    return _PyEval_EvalFrameDefault(ts, f, throwflag);
+    return _PyEval_EvalFrameDefault(ts, interpreter_frame, throwflag);
   }
   LOG(INFO) << LOG_KEY_VALUE("f->f_code->co_name", func_name);
 
+  PyFrameObject *f = PyThreadState_GetFrame(ts);
   const int CODE_AREA_SIZE = 4096;
   uint8_t *code_mem = reinterpret_cast<uint8_t *>(
       mmap(NULL, CODE_AREA_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC,
@@ -136,19 +146,24 @@ PyObject *RaijitEvalFrame(PyThreadState *ts, PyFrameObject *f, int throwflag) {
 
   bool compile_success = true;
 
-  const size_t n_byte = PyBytes_Size(f->f_code->co_code);
+  const size_t n_byte = PyBytes_Size(co_code);
   const size_t n_op = n_byte / 2;
   std::vector<uint8_t *> code_addr;
   std::vector<RelocPatch> reloc_patch;
   const int32_t rel32_dummy_value = 0xdeadbeef;
   {
-    const char *code_buf = PyBytes_AsString(f->f_code->co_code);
+    const char *code_buf = PyBytes_AsString(co_code);
     for (size_t op_index = 0; op_index < n_op; op_index++) {
       code_addr.emplace_back(code_ptr);
-      const uint8_t *code_op_head = code_ptr;
+      // const uint8_t *code_op_head = code_ptr;
       const uint8_t opcode = code_buf[op_index * 2];
       const uint8_t oprand = code_buf[op_index * 2 + 1];
       switch (opcode) {
+      case RESUME: {
+        // https://github.com/python/cpython/blob/4259acd39464b292075f75b7604535cb6158c25b/Doc/library/dis.rst?plain=1#L1517-L1529
+        code_ptr = WriteNop(code_ptr);
+        break;
+      }
       case IS_OP: {
         code_ptr = WritePopRsi(code_ptr);
         code_ptr = WritePopRdi(code_ptr);
@@ -188,14 +203,14 @@ PyObject *RaijitEvalFrame(PyThreadState *ts, PyFrameObject *f, int throwflag) {
         code_ptr = WriteCallRax(code_ptr);
         break;
       }
-      case UNARY_POSITIVE: {
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(code_ptr,
-                               reinterpret_cast<uint64_t>(PyNumber_Positive));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
+      // case UNARY_POSITIVE: {
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(code_ptr,
+      //                          reinterpret_cast<uint64_t>(PyNumber_Positive));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
       case UNARY_NEGATIVE: {
         code_ptr = WritePopRdi(code_ptr);
         code_ptr = WriteMovRax(code_ptr,
@@ -284,442 +299,463 @@ PyObject *RaijitEvalFrame(PyThreadState *ts, PyFrameObject *f, int throwflag) {
         }
         break;
       }
-      case ROT_TWO: {
-        code_ptr = WritePopRax(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        code_ptr = WritePushRdi(code_ptr);
-        break;
-      }
-      case ROT_THREE: {
-        code_ptr = WritePopRax(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        code_ptr = WritePushRsi(code_ptr);
-        code_ptr = WritePushRdi(code_ptr);
-        break;
-      }
-      case CALL_FUNCTION: {
-        if (oprand == 0) {
-          code_ptr = WritePop1stArg(code_ptr);
-          code_ptr = WriteMovRax(
-              code_ptr, reinterpret_cast<uint64_t>(PyObject_CallNoArgs));
-          code_ptr = WriteCallRax(code_ptr);
-          code_ptr = WritePushRax(code_ptr);
-
-        } else {
-          CHECK_EQ(oprand, 1);
-          code_ptr = WritePopRsi(code_ptr);
-          code_ptr = WritePopRdi(code_ptr);
-          code_ptr = WriteMovRax(
-              code_ptr, reinterpret_cast<uint64_t>(PyObject_CallOneArg));
-          code_ptr = WriteCallRax(code_ptr);
-          code_ptr = WritePushRax(code_ptr);
-        }
-        break;
-      }
-      case STORE_FAST: {
-        // https://github.com/python/cpython/blob/6c2f34fa77f884bd79801a9ab8a117cab7d9c7ed/Python/ceval.c#L1879-L1884
-        PyObject **local = &(f->f_localsplus[oprand]);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(local));
-        code_ptr = WriteMovToPtrRaxFromRdi(code_ptr);
-        break;
-      }
-      case BUILD_LIST: {
-        code_ptr = WriteMovTo1stArgFromImm(code_ptr, oprand);
-        code_ptr =
-            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyList_New));
-        code_ptr = WriteCallRax(code_ptr);
-        // R12 is list.
-        code_ptr = WriteMovToR12FromRet(code_ptr);
-
-        for (size_t i = 0; i < oprand; i++) {
-          code_ptr = WriteMovTo1stArgFromR12(code_ptr);
-          code_ptr = WriteMovTo2ndArgFromImm(code_ptr, oprand - i - 1);
-          code_ptr = WritePop3rdArg(code_ptr);
-          code_ptr =
-              WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyList_SetItem));
-          code_ptr = WriteCallRax(code_ptr);
-        }
-
-        code_ptr = WritePushR12(code_ptr);
-        break;
-      }
-      case BUILD_TUPLE: {
-        code_ptr = WriteMovTo1stArgFromImm(code_ptr, oprand);
-        code_ptr =
-            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyTuple_New));
-        code_ptr = WriteCallRax(code_ptr);
-        // R12 is tuple.
-        code_ptr = WriteMovToR12FromRet(code_ptr);
-
-        for (size_t i = 0; i < oprand; i++) {
-          code_ptr = WriteMovTo1stArgFromR12(code_ptr);
-          code_ptr = WriteMovTo2ndArgFromImm(code_ptr, oprand - i - 1);
-          code_ptr = WritePop3rdArg(code_ptr);
-          code_ptr = WriteMovRax(code_ptr,
-                                 reinterpret_cast<uint64_t>(PyTuple_SetItem));
-          code_ptr = WriteCallRax(code_ptr);
-        }
-
-        code_ptr = WritePushR12(code_ptr);
-        break;
-      }
-      case GET_ITER: {
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr =
-            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyObject_GetIter));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
+      // case ROT_TWO: {
+      //   code_ptr = WritePopRax(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   code_ptr = WritePushRdi(code_ptr);
+      //   break;
+      // }
+      // case ROT_THREE: {
+      //   code_ptr = WritePopRax(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   code_ptr = WritePushRsi(code_ptr);
+      //   code_ptr = WritePushRdi(code_ptr);
+      //   break;
+      // }
+      // case CALL_FUNCTION: {
+      //   if (oprand == 0) {
+      //     code_ptr = WritePop1stArg(code_ptr);
+      //     code_ptr = WriteMovRax(
+      //         code_ptr, reinterpret_cast<uint64_t>(PyObject_CallNoArgs));
+      //     code_ptr = WriteCallRax(code_ptr);
+      //     code_ptr = WritePushRax(code_ptr);
+      //
+      //   } else {
+      //     CHECK_EQ(oprand, 1);
+      //     code_ptr = WritePopRsi(code_ptr);
+      //     code_ptr = WritePopRdi(code_ptr);
+      //     code_ptr = WriteMovRax(
+      //         code_ptr, reinterpret_cast<uint64_t>(PyObject_CallOneArg));
+      //     code_ptr = WriteCallRax(code_ptr);
+      //     code_ptr = WritePushRax(code_ptr);
+      //   }
+      //   break;
+      // }
+      // case STORE_FAST: {
+      //   //
+      //   https://github.com/python/cpython/blob/6c2f34fa77f884bd79801a9ab8a117cab7d9c7ed/Python/ceval.c#L1879-L1884
+      //   PyObject **local = &(f->f_localsplus[oprand]);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(local));
+      //   code_ptr = WriteMovToPtrRaxFromRdi(code_ptr);
+      //   break;
+      // }
+      // case BUILD_LIST: {
+      //   code_ptr = WriteMovTo1stArgFromImm(code_ptr, oprand);
+      //   code_ptr =
+      //       WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyList_New));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   // R12 is list.
+      //   code_ptr = WriteMovToR12FromRet(code_ptr);
+      //
+      //   for (size_t i = 0; i < oprand; i++) {
+      //     code_ptr = WriteMovTo1stArgFromR12(code_ptr);
+      //     code_ptr = WriteMovTo2ndArgFromImm(code_ptr, oprand - i - 1);
+      //     code_ptr = WritePop3rdArg(code_ptr);
+      //     code_ptr =
+      //         WriteMovRax(code_ptr,
+      //         reinterpret_cast<uint64_t>(PyList_SetItem));
+      //     code_ptr = WriteCallRax(code_ptr);
+      //   }
+      //
+      //   code_ptr = WritePushR12(code_ptr);
+      //   break;
+      // }
+      // case BUILD_TUPLE: {
+      //   code_ptr = WriteMovTo1stArgFromImm(code_ptr, oprand);
+      //   code_ptr =
+      //       WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyTuple_New));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   // R12 is tuple.
+      //   code_ptr = WriteMovToR12FromRet(code_ptr);
+      //
+      //   for (size_t i = 0; i < oprand; i++) {
+      //     code_ptr = WriteMovTo1stArgFromR12(code_ptr);
+      //     code_ptr = WriteMovTo2ndArgFromImm(code_ptr, oprand - i - 1);
+      //     code_ptr = WritePop3rdArg(code_ptr);
+      //     code_ptr = WriteMovRax(code_ptr,
+      //                            reinterpret_cast<uint64_t>(PyTuple_SetItem));
+      //     code_ptr = WriteCallRax(code_ptr);
+      //   }
+      //
+      //   code_ptr = WritePushR12(code_ptr);
+      //   break;
+      // }
+      // case GET_ITER: {
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr =
+      //       WriteMovRax(code_ptr,
+      //       reinterpret_cast<uint64_t>(PyObject_GetIter));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
       case LOAD_FAST: {
-        PyObject **local = &(f->f_localsplus[oprand]);
+        PyObject *local = interpreter_frame->localsplus[oprand];
         code_ptr = WriteMovRdi(code_ptr, reinterpret_cast<uint64_t>(local));
         code_ptr = WriteMovToRaxFromPtrRdi(code_ptr);
         code_ptr = WritePushRax(code_ptr);
         break;
       }
-      case LOAD_GLOBAL: {
-        const auto name = PyTuple_GET_ITEM(f->f_code->co_names, oprand);
-        PyObject *global = PyDict_GetItem(f->f_globals, name);
-        if (global == NULL) {
-          global = PyDict_GetItem(f->f_builtins, name);
-        }
-        CHECK_NOTNULL(global);
-        LOG(INFO) << LOG_SHOW(PyUnicode_AsUTF8(name)) << LOG_SHOW(global);
-        code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(global));
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
+      // case LOAD_GLOBAL: {
+      //   const auto name = PyTuple_GET_ITEM(f->f_code->co_names, oprand);
+      //   PyObject *global = PyDict_GetItem(f->f_globals, name);
+      //   if (global == NULL) {
+      //     global = PyDict_GetItem(f->f_builtins, name);
+      //   }
+      //   CHECK_NOTNULL(global);
+      //   LOG(INFO) << LOG_SHOW(PyUnicode_AsUTF8(name)) << LOG_SHOW(global);
+      //   code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(global));
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
       case LOAD_CONST: {
-        const auto const_ = PyTuple_GET_ITEM(f->f_code->co_consts, oprand);
+        const auto const_ = PyTuple_GET_ITEM(code->co_consts, oprand);
         code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(const_));
         code_ptr = WritePushRax(code_ptr);
         break;
       }
-      case LOAD_METHOD: {
-        const auto name = PyTuple_GET_ITEM(f->f_code->co_names, oprand);
-        LOG(INFO) << LOG_SHOW(PyUnicode_AsUTF8(name));
-        code_ptr = WritePop1stArg(code_ptr);
-        code_ptr =
-            WriteMovTo2ndArgFromImm(code_ptr, reinterpret_cast<uint64_t>(name));
-        code_ptr =
-            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyObject_GetAttr));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-      }
+      // case LOAD_METHOD: {
+      //   const auto name = PyTuple_GET_ITEM(f->f_code->co_names, oprand);
+      //   LOG(INFO) << LOG_SHOW(PyUnicode_AsUTF8(name));
+      //   code_ptr = WritePop1stArg(code_ptr);
+      //   code_ptr =
+      //       WriteMovTo2ndArgFromImm(code_ptr,
+      //       reinterpret_cast<uint64_t>(name));
+      //   code_ptr =
+      //       WriteMovRax(code_ptr,
+      //       reinterpret_cast<uint64_t>(PyObject_GetAttr));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      // }
       case RETURN_VALUE: {
         code_ptr = WritePopRax(code_ptr);
-        // code_ptr = WriteSoftwareBreakpoint(code_ptr);
         code_ptr = WriteLeave(code_ptr);
         code_ptr = WriteRet(code_ptr);
         break;
       }
-      case BINARY_ADD: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyLongAdd));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case BINARY_SUBTRACT: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyLongSub));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case BINARY_OR: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr =
-            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyNumber_Or));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case BINARY_AND: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr =
-            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyNumber_And));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case BINARY_XOR: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr =
-            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyNumber_Xor));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case BINARY_LSHIFT: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr =
-            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyNumber_Lshift));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case BINARY_RSHIFT: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr =
-            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyNumber_Rshift));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case BINARY_MULTIPLY: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(code_ptr,
-                               reinterpret_cast<uint64_t>(PyNumber_Multiply));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case BINARY_TRUE_DIVIDE: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(code_ptr,
-                               reinterpret_cast<uint64_t>(PyNumber_TrueDivide));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case BINARY_FLOOR_DIVIDE: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(
-            code_ptr, reinterpret_cast<uint64_t>(PyNumber_FloorDivide));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case BINARY_MODULO: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(code_ptr,
-                               reinterpret_cast<uint64_t>(PyNumber_Remainder));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case BINARY_POWER: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr =
-            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyNumber_Power));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case BINARY_MATRIX_MULTIPLY: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(
-            code_ptr, reinterpret_cast<uint64_t>(PyNumber_MatrixMultiply));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case INPLACE_ADD: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(code_ptr,
-                               reinterpret_cast<uint64_t>(PyNumber_InPlaceAdd));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case INPLACE_SUBTRACT: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(
-            code_ptr, reinterpret_cast<uint64_t>(PyNumber_InPlaceSubtract));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case INPLACE_OR: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(code_ptr,
-                               reinterpret_cast<uint64_t>(PyNumber_InPlaceOr));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case INPLACE_AND: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(code_ptr,
-                               reinterpret_cast<uint64_t>(PyNumber_InPlaceAnd));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case INPLACE_XOR: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(code_ptr,
-                               reinterpret_cast<uint64_t>(PyNumber_InPlaceXor));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case INPLACE_LSHIFT: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(
-            code_ptr, reinterpret_cast<uint64_t>(PyNumber_InPlaceLshift));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case INPLACE_RSHIFT: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(
-            code_ptr, reinterpret_cast<uint64_t>(PyNumber_InPlaceRshift));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case INPLACE_MULTIPLY: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(
-            code_ptr, reinterpret_cast<uint64_t>(PyNumber_InPlaceMultiply));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case INPLACE_TRUE_DIVIDE: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(
-            code_ptr, reinterpret_cast<uint64_t>(PyNumber_InPlaceTrueDivide));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case INPLACE_FLOOR_DIVIDE: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(
-            code_ptr, reinterpret_cast<uint64_t>(PyNumber_InPlaceFloorDivide));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case INPLACE_MODULO: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(
-            code_ptr, reinterpret_cast<uint64_t>(PyNumber_InPlaceRemainder));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case INPLACE_POWER: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRdx(code_ptr, reinterpret_cast<uint64_t>(Py_None));
-        code_ptr = WriteMovRax(
-            code_ptr, reinterpret_cast<uint64_t>(PyNumber_InPlacePower));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case INPLACE_MATRIX_MULTIPLY: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(
-                                             PyNumber_InPlaceMatrixMultiply));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case COMPARE_OP: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        switch (oprand) {
-        case Py_GT: {
-          code_ptr =
-              WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyLongGT));
-          break;
-        }
-        case Py_EQ: {
-          code_ptr =
-              WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyLongGT));
-          break;
-        }
-        case Py_LE: {
-          code_ptr =
-              WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyLongLE));
-          break;
-        }
-        default: {
-          LOG(FATAL) << "UNKNOWN" << LOG_SHOW(int(opcode))
-                     << LOG_SHOW(int(oprand));
-          compile_success = false;
-          break;
-        }
-        }
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
-      case POP_JUMP_IF_FALSE: {
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(IsPyTrue));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WriteCmpRaxImm8(code_ptr, 0);
-        code_ptr = WriteJeRel32(code_ptr, rel32_dummy_value);
-        CHECK_LE(std::numeric_limits<int32_t>::min(), code_op_head - code_ptr);
-        CHECK_LE(code_op_head - code_ptr, std::numeric_limits<int32_t>::max());
-        reloc_patch.emplace_back(RelocPatch{
-            .addr = code_ptr - 4,
-            .cur_op_index = op_index,
-            .jump_op_index = op_index + oprand / 2,
-            .addend = static_cast<int32_t>(code_op_head - code_ptr),
-        });
-        break;
-      }
-      case NOP: {
+      case CACHE: {
+        // https://github.com/python/cpython/blob/4259acd39464b292075f75b7604535cb6158c25b/Doc/library/dis.rst?plain=1#L490-L505
         code_ptr = WriteNop(code_ptr);
         break;
       }
+      case SWAP: {
+        code_ptr = WritePopRax(code_ptr);
+        code_ptr = WritePopRdi(code_ptr);
+        code_ptr = WritePushRax(code_ptr);
+        code_ptr = WritePushRdi(code_ptr);
+        break;
+      }
+      // case BINARY_ADD: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(code_ptr,
+      //   reinterpret_cast<uint64_t>(PyLongAdd)); code_ptr =
+      //   WriteCallRax(code_ptr); code_ptr = WritePushRax(code_ptr); break;
+      // }
+      // case BINARY_SUBTRACT: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(code_ptr,
+      //   reinterpret_cast<uint64_t>(PyLongSub)); code_ptr =
+      //   WriteCallRax(code_ptr); code_ptr = WritePushRax(code_ptr); break;
+      // }
+      // case BINARY_OR: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr =
+      //       WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyNumber_Or));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case BINARY_AND: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr =
+      //       WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyNumber_And));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case BINARY_XOR: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr =
+      //       WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyNumber_Xor));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case BINARY_LSHIFT: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr =
+      //       WriteMovRax(code_ptr,
+      //       reinterpret_cast<uint64_t>(PyNumber_Lshift));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case BINARY_RSHIFT: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr =
+      //       WriteMovRax(code_ptr,
+      //       reinterpret_cast<uint64_t>(PyNumber_Rshift));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case BINARY_MULTIPLY: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(code_ptr,
+      //                          reinterpret_cast<uint64_t>(PyNumber_Multiply));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case BINARY_TRUE_DIVIDE: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(code_ptr,
+      //                          reinterpret_cast<uint64_t>(PyNumber_TrueDivide));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case BINARY_FLOOR_DIVIDE: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(
+      //       code_ptr, reinterpret_cast<uint64_t>(PyNumber_FloorDivide));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case BINARY_MODULO: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(code_ptr,
+      //                          reinterpret_cast<uint64_t>(PyNumber_Remainder));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case BINARY_POWER: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr =
+      //       WriteMovRax(code_ptr,
+      //       reinterpret_cast<uint64_t>(PyNumber_Power));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case BINARY_MATRIX_MULTIPLY: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(
+      //       code_ptr, reinterpret_cast<uint64_t>(PyNumber_MatrixMultiply));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case INPLACE_ADD: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(code_ptr,
+      //                          reinterpret_cast<uint64_t>(PyNumber_InPlaceAdd));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case INPLACE_SUBTRACT: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(
+      //       code_ptr, reinterpret_cast<uint64_t>(PyNumber_InPlaceSubtract));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case INPLACE_OR: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(code_ptr,
+      //                          reinterpret_cast<uint64_t>(PyNumber_InPlaceOr));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case INPLACE_AND: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(code_ptr,
+      //                          reinterpret_cast<uint64_t>(PyNumber_InPlaceAnd));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case INPLACE_XOR: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(code_ptr,
+      //                          reinterpret_cast<uint64_t>(PyNumber_InPlaceXor));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case INPLACE_LSHIFT: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(
+      //       code_ptr, reinterpret_cast<uint64_t>(PyNumber_InPlaceLshift));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case INPLACE_RSHIFT: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(
+      //       code_ptr, reinterpret_cast<uint64_t>(PyNumber_InPlaceRshift));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case INPLACE_MULTIPLY: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(
+      //       code_ptr, reinterpret_cast<uint64_t>(PyNumber_InPlaceMultiply));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case INPLACE_TRUE_DIVIDE: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(
+      //       code_ptr,
+      //       reinterpret_cast<uint64_t>(PyNumber_InPlaceTrueDivide));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case INPLACE_FLOOR_DIVIDE: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(
+      //       code_ptr,
+      //       reinterpret_cast<uint64_t>(PyNumber_InPlaceFloorDivide));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case INPLACE_MODULO: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(
+      //       code_ptr, reinterpret_cast<uint64_t>(PyNumber_InPlaceRemainder));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case INPLACE_POWER: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRdx(code_ptr,
+      //   reinterpret_cast<uint64_t>(Py_None)); code_ptr = WriteMovRax(
+      //       code_ptr, reinterpret_cast<uint64_t>(PyNumber_InPlacePower));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case INPLACE_MATRIX_MULTIPLY: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(
+      //                                        PyNumber_InPlaceMatrixMultiply));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case COMPARE_OP: {
+      //   code_ptr = WritePopRsi(code_ptr);
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   switch (oprand) {
+      //   case Py_GT: {
+      //     code_ptr =
+      //         WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyLongGT));
+      //     break;
+      //   }
+      //   case Py_EQ: {
+      //     code_ptr =
+      //         WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyLongGT));
+      //     break;
+      //   }
+      //   case Py_LE: {
+      //     code_ptr =
+      //         WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyLongLE));
+      //     break;
+      //   }
+      //   default: {
+      //     LOG(FATAL) << "UNKNOWN" << LOG_SHOW(int(opcode))
+      //                << LOG_SHOW(int(oprand));
+      //     compile_success = false;
+      //     break;
+      //   }
+      //   }
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
+      // case POP_JUMP_IF_FALSE: {
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   code_ptr = WriteMovRax(code_ptr,
+      //   reinterpret_cast<uint64_t>(IsPyTrue)); code_ptr =
+      //   WriteCallRax(code_ptr); code_ptr = WriteCmpRaxImm8(code_ptr, 0);
+      //   code_ptr = WriteJeRel32(code_ptr, rel32_dummy_value);
+      //   CHECK_LE(std::numeric_limits<int32_t>::min(), code_op_head -
+      //   code_ptr); CHECK_LE(code_op_head - code_ptr,
+      //   std::numeric_limits<int32_t>::max());
+      //   reloc_patch.emplace_back(RelocPatch{
+      //       .addr = code_ptr - 4,
+      //       .cur_op_index = op_index,
+      //       .jump_op_index = op_index + oprand / 2,
+      //       .addend = static_cast<int32_t>(code_op_head - code_ptr),
+      //   });
+      //   break;
+      // }
+      // case NOP: {
+      //   code_ptr = WriteNop(code_ptr);
+      //   break;
+      // }
       case POP_TOP: {
         code_ptr = WritePopRax(code_ptr);
         break;
       }
-      case MAKE_FUNCTION: {
-        // https://github.com/python/cpython/blob/6c2f34fa77f884bd79801a9ab8a117cab7d9c7ed/Python/ceval.c#L4291-L4294
-        // PyObject *qualname = POP();
-        code_ptr = WritePopRdx(code_ptr);
-        // PyObject *codeobj = POP();
-        code_ptr = WritePopRdi(code_ptr);
-        // Set f->f_globals
-        WriteMovRsi(code_ptr, reinterpret_cast<uint64_t>(f->f_globals));
-
-        WriteMovRax(code_ptr,
-                    reinterpret_cast<uint64_t>(PyFunction_NewWithQualName));
-        code_ptr = WriteCallRax(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        break;
-      }
+      // case MAKE_FUNCTION: {
+      //   //
+      //   https://github.com/python/cpython/blob/6c2f34fa77f884bd79801a9ab8a117cab7d9c7ed/Python/ceval.c#L4291-L4294
+      //   // PyObject *qualname = POP();
+      //   code_ptr = WritePopRdx(code_ptr);
+      //   // PyObject *codeobj = POP();
+      //   code_ptr = WritePopRdi(code_ptr);
+      //   // Set f->f_globals
+      //   WriteMovRsi(code_ptr, reinterpret_cast<uint64_t>(f->f_globals));
+      //
+      //   WriteMovRax(code_ptr,
+      //               reinterpret_cast<uint64_t>(PyFunction_NewWithQualName));
+      //   code_ptr = WriteCallRax(code_ptr);
+      //   code_ptr = WritePushRax(code_ptr);
+      //   break;
+      // }
       default: {
         LOG(FATAL) << "UNKNOWN"
                    << LOG_KEY_VALUE("opcode", OpcodeToString(opcode))
@@ -740,7 +776,10 @@ PyObject *RaijitEvalFrame(PyThreadState *ts, PyFrameObject *f, int throwflag) {
   }
 
   if (compile_success) {
-    const char *code_buf = PyBytes_AsString(f->f_code->co_code);
+    PyCodeObject *code = reinterpret_cast<PyCodeObject *>(
+        PyUnstable_InterpreterFrame_GetCode(interpreter_frame));
+    PyObject *co_code = PyCode_GetCode(code);
+    const char *code_buf = PyBytes_AsString(co_code);
     ZyanU64 runtime_address = reinterpret_cast<ZyanU64>(code_mem);
     // Loop over the instructions in our buffer.
     ZyanUSize offset = 0;
@@ -783,11 +822,11 @@ PyObject *RaijitEvalFrame(PyThreadState *ts, PyFrameObject *f, int throwflag) {
     return result;
   } else {
     munmap(code_mem, CODE_AREA_SIZE);
-    return _PyEval_EvalFrameDefault(ts, f, throwflag);
+    return _PyEval_EvalFrameDefault(ts, interpreter_frame, throwflag);
   }
 }
 
-PyObject *(*original_eval_frame_func)(PyThreadState *ts, PyFrameObject *f,
+PyObject *(*original_eval_frame_func)(PyThreadState *ts, _PyInterpreterFrame *f,
                                       int throwflag) = NULL;
 
 extern "C" {
