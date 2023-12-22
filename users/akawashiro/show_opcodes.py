@@ -32,6 +32,11 @@ def define_class():
 
     return A
 
+import random
+
+def load_method():
+    return random.random()
+
 print(dis.dis(unary_not))
 print(dis.dis(unary_invert))
 print(dis.dis(dup_top))
@@ -40,3 +45,4 @@ print(dis.dis(dict_merge2))
 print(dis.dis(set_update))
 print(dis.dis(define_lambda))
 # print(dis.dis(define_class))
+print(dis.dis(load_method))
