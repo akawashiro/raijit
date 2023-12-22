@@ -26,6 +26,10 @@ uint8_t *WritePushRsi(uint8_t *addr);
 // Handy aliases
 const auto WritePush1stArg = WritePushRdi;
 
+// Imm
+uint8_t *WriteMovTo1stArgFromImm(uint8_t *addr, uint64_t value);
+uint8_t *WriteMovTo2ndArgFromImm(uint8_t *addr, uint64_t value);
+
 uint8_t *WriteLeave(uint8_t *addr);
 uint8_t *WriteRet(uint8_t *addr);
 uint8_t *WriteCallRax(uint8_t *addr);
@@ -39,9 +43,6 @@ uint8_t *WriteMovToRaxFromPtrRdi(uint8_t *addr);
 uint8_t *WriteMovToRdiFromRax(uint8_t *addr);
 uint8_t *WriteMovToR12FromRet(uint8_t *addr);
 uint8_t *WriteMovTo1stArgFromR13(uint8_t *addr);
-uint8_t *WriteMovTo2ndArgFromImm(uint8_t *addr, uint64_t value);
 uint8_t* WriteMovTo2ndArgFromRet(uint8_t* addr);
 uint8_t* WriteMovTo1stArgFromR12(uint8_t* addr);
 uint8_t* WritePushR12(uint8_t* addr);
-uint8_t *WriteMovTo1stArgFromImm(uint8_t *addr, uint64_t value);
-uint8_t *WriteMov2ndArgFromImm(uint8_t *addr, uint64_t value);

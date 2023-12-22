@@ -57,15 +57,6 @@ uint8_t *WriteMovTo2ndArgFromImm(uint8_t *addr, uint64_t value) {
   return p + 10;
 }
 
-uint8_t *WriteMov2ndArgFromImm(uint8_t *addr, uint64_t value) {
-  uint8_t *p = (uint8_t *)addr;
-  // mov rsi, imm64
-  p[0] = 0x48;
-  p[1] = 0xbe;
-  memcpy(p + 2, &value, 8);
-  return p + 10;
-}
-
 uint8_t *WriteMovTo1stArgFromImm(uint8_t *addr, uint64_t value) {
   uint8_t *p = (uint8_t *)addr;
   // mov rdi, imm64
