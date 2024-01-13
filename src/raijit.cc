@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <filesystem>
 
 // Python related includes
 #include <Python.h>
@@ -18,13 +19,11 @@
 #include <object.h>
 #include <opcode.h>
 
-// Third party includes
-#include <Zydis/Zydis.h>
-
 // Raijit includes
 #include "log.h"
 #include "opcode_table.h"
 #include "write_insts.h"
+#include "disasm.h"
 
 void PrintPyObject(PyObject *v) {
   if (PyLong_Check(v)) {
@@ -608,38 +607,8 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         PyUnstable_InterpreterFrame_GetCode(interpreter_frame));
     PyObject *co_code = PyCode_GetCode(code);
     const char *code_buf = PyBytes_AsString(co_code);
-    ZyanU64 runtime_address = reinterpret_cast<ZyanU64>(code_mem);
-    // Loop over the instructions in our buffer.
-    ZyanUSize offset = 0;
-    ZydisDisassembledInstruction instruction;
-    size_t opcode_count = 0;
-    while (ZYAN_SUCCESS(ZydisDisassembleIntel(
-        /* machine_mode:    */ ZYDIS_MACHINE_MODE_LONG_64,
-        /* runtime_address: */ runtime_address,
-        /* buffer:          */ reinterpret_cast<ZyanU8 *>(code_mem) + offset,
-        // /* length:          */ CODE_AREA_SIZE - offset,
-        /* length:          */ code_ptr - code_mem - offset,
-        /* instruction:     */ &instruction))) {
-      if (code_addr[opcode_count] == code_mem + offset && opcode_count < n_op) {
-        printf("; opcode=%s oprand=%d\n",
-               OpcodeToString(code_buf[opcode_count * 2]).c_str(),
-               code_buf[opcode_count * 2 + 1]);
-        opcode_count++;
-      }
-      printf("%016lx ", runtime_address);
-      const ZyanUSize instr_max = 16;
-      const ZyanUSize instr_len = instruction.info.length;
 
-      for (ZyanU8 i = 0; i < instr_len; ++i) {
-        printf("%02X", code_mem[offset + i]);
-      }
-      for (ZyanUSize i = 0; i < instr_max - instr_len; ++i) {
-        printf("  ");
-      }
-      printf(" %s\n", instruction.text);
-      offset += instruction.info.length;
-      runtime_address += instruction.info.length;
-    }
+    Disasm(code, co_code, code_buf, code_mem, code_ptr, code_addr, n_op);
   }
   if (compile_success) {
     PyObject *(*func)() = reinterpret_cast<PyObject *(*)()>(code_mem);

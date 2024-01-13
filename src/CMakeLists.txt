@@ -35,7 +35,7 @@ add_subdirectory(${CMAKE_CURRENT_BINARY_DIR}/zydis
 SET(PYTHON_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../cpython-install/include/python3.12)
 SET(PYTHON_LIBRARY ${CMAKE_CURRENT_SOURCE_DIR}/../cpython-install/lib/libpython3.12.so)
 
-add_library(raijit SHARED raijit.cc write_insts.cc opcode_table.cc)
+add_library(raijit SHARED raijit.cc write_insts.cc opcode_table.cc disasm.cc)
 target_link_libraries(raijit glog::glog Zydis ${PYTHON_LIBRARY})
 target_include_directories(raijit PRIVATE ${PYTHON_INCLUDE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/glog ${CMAKE_CURRENT_BINARY_DIR}/glog/src)
 set_target_properties(raijit PROPERTIES PREFIX "")
