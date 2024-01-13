@@ -8,8 +8,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v2
-    - name: docker build
+    - name: Checkout
+      uses: actions/checkout@v2
+      with:
+          lfs: true
+    - name: Checkout LFS objects
+      run: git lfs checkout
+    - name: Docker build
       uses: docker/build-push-action@v2
       with:
         context: .

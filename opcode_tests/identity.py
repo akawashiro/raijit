@@ -1,7 +1,7 @@
 import raijit
 
-def identity(a):
+def raijit_test_identity(a):
     return a
 
 raijit.enable()
-assert identity(42) == 42
+assert raijit_test_identity(42) == 42

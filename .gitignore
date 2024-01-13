@@ -3,3 +3,5 @@ build
 compile_commands.json
 .gdb_history
 raytrace.ppm
+cpython-src
+cpython-install

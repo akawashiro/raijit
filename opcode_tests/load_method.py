@@ -1,8 +1,11 @@
 import random
+import dis
 
 def raijit_test_load_method():
     random.seed(0)
     return random.random()
+
+dis.dis(raijit_test_load_method)
 
 r0 = raijit_test_load_method()
 
