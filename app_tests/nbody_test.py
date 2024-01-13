@@ -37,5 +37,7 @@ pos1 = nbody()
 import raijit
 raijit.enable()
 pos2 = nbody()
+print(pos1)
+print(pos2)
 
 assert pos1 == pos2
