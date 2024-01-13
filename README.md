@@ -42,7 +42,7 @@ $ ./scripts/run_opcode_tests.sh
 
 Run CI tests on your computer using
 ```console
-$ sudo docker build . --network=host -f ./ci/ubuntu-Dockerfile
+$ ./scripts/run_ci_local.sh
 ```
 
 ## Directory structure
