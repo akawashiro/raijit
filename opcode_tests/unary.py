@@ -13,6 +13,7 @@ def raijit_test_unary_invert(a):
     return ~a
 
 raijit.enable()
+
 assert raijit_test_unary_pos(42) == 42
 assert raijit_test_unary_neg(42) == -42
 assert raijit_test_unary_not(True) == False
