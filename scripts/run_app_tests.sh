@@ -1,5 +1,9 @@
 #!/bin/bash -eux
 
 cd $(git rev-parse --show-toplevel)
+ROOT_DIR=$(pwd)
+PYTHON_BINARY=${ROOT_DIR}/cpython-install/bin/python3.12
 export PYTHONPATH=./build
-python3 ./app_tests/nbody_test.py
+export LD_LIBRARY_PATH=${ROOT_DIR}/cpython-install/lib
+
+${PYTHON_BINARY} ./app_tests/nbody_test.py
