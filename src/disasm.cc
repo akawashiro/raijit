@@ -11,9 +11,11 @@
 #include "log.h"
 #include "opcode_table.h"
 
-void Disasm(PyCodeObject *code, PyObject *co_code, const char *code_buf,
-            uint8_t *code_mem, uint8_t *code_ptr,
-            std::vector<uint8_t *> code_addr, const size_t n_op) {
+void Disasm(const PyCodeObject *code, const PyObject *co_code,
+                             const char *code_buf, const uint8_t *code_mem,
+                             const uint8_t *code_ptr,
+                             const std::vector<uint8_t *>& code_addr,
+                             const size_t n_op){
   auto disasm_file = std::filesystem::temp_directory_path() /
                      (std::string("raijit_disasm_") + std::to_string(rand()));
 
@@ -27,7 +29,7 @@ void Disasm(PyCodeObject *code, PyObject *co_code, const char *code_buf,
   while (ZYAN_SUCCESS(ZydisDisassembleIntel(
       /* machine_mode:    */ ZYDIS_MACHINE_MODE_LONG_64,
       /* runtime_address: */ runtime_address,
-      /* buffer:          */ reinterpret_cast<ZyanU8 *>(code_mem) + offset,
+      /* buffer:          */ reinterpret_cast<const ZyanU8 *>(code_mem) + offset,
       // /* length:          */ CODE_AREA_SIZE - offset,
       /* length:          */ code_ptr - code_mem - offset,
       /* instruction:     */ &instruction))) {
