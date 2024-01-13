@@ -136,7 +136,7 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
       !func_name.starts_with("raijit_test_")) {
     return _PyEval_EvalFrameDefault(ts, interpreter_frame, throwflag);
   }
-  LOG(INFO) << LOG_KEY_VALUE("f->f_code->co_name", func_name);
+  LOG(INFO) << "Compiling a function " << func_name;
 
   // PyFrameObject *f = PyThreadState_GetFrame(ts);
   const int CODE_AREA_SIZE = 4096;
@@ -363,13 +363,13 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
       case LOAD_GLOBAL: {
         const auto name =
             PyTuple_GET_ITEM(interpreter_frame->f_code->co_names, oprand >> 1);
-        LOG(INFO) << LOG_SHOW(PyUnicode_AsUTF8(name));
+        LOG(INFO) << "LOAD_GLOBAL: " << PyUnicode_AsUTF8(name);
         PyObject *global = PyDict_GetItem(interpreter_frame->f_globals, name);
         if (global == NULL) {
           global = PyDict_GetItem(interpreter_frame->f_builtins, name);
         }
         CHECK_NOTNULL(global);
-        LOG(INFO) << LOG_SHOW(PyUnicode_AsUTF8(name)) << LOG_SHOW(global);
+        LOG(INFO) << "LOAD_GLOBAL: " << PyUnicode_AsUTF8(name) << LOG_SHOW(global);
         code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(global));
         code_ptr = WritePushRax(code_ptr);
         break;
@@ -383,7 +383,7 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
       case LOAD_ATTR: {
         const auto name =
             PyTuple_GET_ITEM(interpreter_frame->f_code->co_names, oprand >> 1);
-        LOG(INFO) << LOG_SHOW(PyUnicode_AsUTF8(name));
+        LOG(INFO) << "LOAD_ATTR: " << PyUnicode_AsUTF8(name);
         code_ptr = WritePop1stArg(code_ptr);
         code_ptr =
             WriteMovTo2ndArgFromImm(code_ptr, reinterpret_cast<uint64_t>(name));
@@ -644,7 +644,7 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
   if (compile_success) {
     PyObject *(*func)() = reinterpret_cast<PyObject *(*)()>(code_mem);
     auto result = func();
-    LOG(INFO) << LOG_SHOW(result);
+    LOG(INFO) << "Result of execution of JITed function: " << result;
     munmap(code_mem, CODE_AREA_SIZE);
     // TODO: Delete this
     Py_INCREF(result);
