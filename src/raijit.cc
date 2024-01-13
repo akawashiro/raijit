@@ -446,6 +446,13 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         code_ptr = WritePushRdi(code_ptr);
         break;
       }
+      case FOR_ITER: {
+        // https://github.com/python/cpython/blob/4259acd39464b292075f75b7604535cb6158c25b/Python/generated_cases.c.h#L3260-L3301
+        LOG(FATAL) << "FOR_ITER";
+      }
+      case END_FOR: {
+        LOG(FATAL) << "END_FOR";
+      }
       case BINARY_OP_ADD_INT: {
         code_ptr = WritePopRsi(code_ptr);
         code_ptr = WritePopRdi(code_ptr);
@@ -482,7 +489,6 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         code_ptr = WriteCallRax(code_ptr);
         code_ptr = WritePushRax(code_ptr);
         break;
-
       }
       case BINARY_OP: {
         static std::map<uint8_t, uint64_t> oprand_to_func = {
