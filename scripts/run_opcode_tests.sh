@@ -21,3 +21,4 @@ ${PYTHON_BINARY} ./opcode_tests/binary.py
 ${PYTHON_BINARY} ./opcode_tests/inplace.py
 ${PYTHON_BINARY} ./opcode_tests/map.py
 ${PYTHON_BINARY} ./opcode_tests/misc.py
+${PYTHON_BINARY} ./opcode_tests/for.py

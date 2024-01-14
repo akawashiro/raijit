@@ -5,6 +5,7 @@
 #include <cstdint>
 
 // C++
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -18,10 +19,8 @@
 #include <object.h>
 #include <opcode.h>
 
-// Third party includes
-#include <Zydis/Zydis.h>
-
 // Raijit includes
+#include "disasm.h"
 #include "log.h"
 #include "opcode_table.h"
 #include "write_insts.h"
@@ -136,7 +135,7 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
       !func_name.starts_with("raijit_test_")) {
     return _PyEval_EvalFrameDefault(ts, interpreter_frame, throwflag);
   }
-  LOG(INFO) << LOG_KEY_VALUE("f->f_code->co_name", func_name);
+  LOG(INFO) << "Compiling a function " << func_name;
 
   // PyFrameObject *f = PyThreadState_GetFrame(ts);
   const int CODE_AREA_SIZE = 4096;
@@ -363,13 +362,14 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
       case LOAD_GLOBAL: {
         const auto name =
             PyTuple_GET_ITEM(interpreter_frame->f_code->co_names, oprand >> 1);
-        LOG(INFO) << LOG_SHOW(PyUnicode_AsUTF8(name));
+        LOG(INFO) << "LOAD_GLOBAL: " << PyUnicode_AsUTF8(name);
         PyObject *global = PyDict_GetItem(interpreter_frame->f_globals, name);
         if (global == NULL) {
           global = PyDict_GetItem(interpreter_frame->f_builtins, name);
         }
         CHECK_NOTNULL(global);
-        LOG(INFO) << LOG_SHOW(PyUnicode_AsUTF8(name)) << LOG_SHOW(global);
+        LOG(INFO) << "LOAD_GLOBAL: " << PyUnicode_AsUTF8(name)
+                  << LOG_SHOW(global);
         code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(global));
         code_ptr = WritePushRax(code_ptr);
         break;
@@ -383,7 +383,7 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
       case LOAD_ATTR: {
         const auto name =
             PyTuple_GET_ITEM(interpreter_frame->f_code->co_names, oprand >> 1);
-        LOG(INFO) << LOG_SHOW(PyUnicode_AsUTF8(name));
+        LOG(INFO) << "LOAD_ATTR: " << PyUnicode_AsUTF8(name);
         code_ptr = WritePop1stArg(code_ptr);
         code_ptr =
             WriteMovTo2ndArgFromImm(code_ptr, reinterpret_cast<uint64_t>(name));
@@ -446,6 +446,43 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         code_ptr = WritePushRdi(code_ptr);
         break;
       }
+      case FOR_ITER: {
+        // https://github.com/python/cpython/blob/4259acd39464b292075f75b7604535cb6158c25b/Python/generated_cases.c.h#L3260-L3301
+        code_ptr = WritePopRdi(code_ptr);
+        code_ptr = WritePushRdi(code_ptr);
+        code_ptr =
+            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyIter_Next));
+        code_ptr = WriteCallRax(code_ptr);
+        code_ptr = WritePushRax(code_ptr);
+        code_ptr = WriteCmpRaxImm8(code_ptr, 0);
+
+        // Jump to END_FOR when iter_next returns NULL.
+        code_ptr = WriteJzRel32(code_ptr, rel32_dummy_value);
+        reloc_patch.emplace_back(RelocPatch{
+            .addr = code_ptr - 4,
+            .cur_op_index = op_index,
+            .jump_op_index = op_index + oprand + 2, // TODO: Check this.
+            .addend = static_cast<int32_t>(code_op_head - code_ptr),
+        });
+        break;
+      }
+      case END_FOR: {
+        // https://github.com/python/cpython/blob/4259acd39464b292075f75b7604535cb6158c25b/Python/generated_cases.c.h#L271-L288
+        // TODO: Decrease refcount of iter.
+        code_ptr = WritePopRax(code_ptr);
+        code_ptr = WritePopRax(code_ptr);
+        break;
+      }
+      case JUMP_BACKWARD: {
+        code_ptr = WriteJmpRel32(code_ptr, rel32_dummy_value);
+        reloc_patch.emplace_back(RelocPatch{
+            .addr = code_ptr - 4,
+            .cur_op_index = op_index,
+            .jump_op_index = op_index - oprand + 1,
+            .addend = static_cast<int32_t>(code_op_head - code_ptr),
+        });
+        break;
+      }
       case BINARY_OP_ADD_INT: {
         code_ptr = WritePopRsi(code_ptr);
         code_ptr = WritePopRdi(code_ptr);
@@ -482,7 +519,6 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         code_ptr = WriteCallRax(code_ptr);
         code_ptr = WritePushRax(code_ptr);
         break;
-
       }
       case BINARY_OP: {
         static std::map<uint8_t, uint64_t> oprand_to_func = {
@@ -548,7 +584,7 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(IsPyTrue));
         code_ptr = WriteCallRax(code_ptr);
         code_ptr = WriteCmpRaxImm8(code_ptr, 0);
-        code_ptr = WriteJeRel32(code_ptr, rel32_dummy_value);
+        code_ptr = WriteJzRel32(code_ptr, rel32_dummy_value);
         CHECK_LE(std::numeric_limits<int32_t>::min(), code_op_head - code_ptr);
         CHECK_LE(code_op_head - code_ptr, std::numeric_limits<int32_t>::max());
         reloc_patch.emplace_back(RelocPatch{
@@ -602,43 +638,13 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         PyUnstable_InterpreterFrame_GetCode(interpreter_frame));
     PyObject *co_code = PyCode_GetCode(code);
     const char *code_buf = PyBytes_AsString(co_code);
-    ZyanU64 runtime_address = reinterpret_cast<ZyanU64>(code_mem);
-    // Loop over the instructions in our buffer.
-    ZyanUSize offset = 0;
-    ZydisDisassembledInstruction instruction;
-    size_t opcode_count = 0;
-    while (ZYAN_SUCCESS(ZydisDisassembleIntel(
-        /* machine_mode:    */ ZYDIS_MACHINE_MODE_LONG_64,
-        /* runtime_address: */ runtime_address,
-        /* buffer:          */ reinterpret_cast<ZyanU8 *>(code_mem) + offset,
-        // /* length:          */ CODE_AREA_SIZE - offset,
-        /* length:          */ code_ptr - code_mem - offset,
-        /* instruction:     */ &instruction))) {
-      if (code_addr[opcode_count] == code_mem + offset && opcode_count < n_op) {
-        printf("; opcode=%s oprand=%d\n",
-               OpcodeToString(code_buf[opcode_count * 2]).c_str(),
-               code_buf[opcode_count * 2 + 1]);
-        opcode_count++;
-      }
-      printf("%016lx ", runtime_address);
-      const ZyanUSize instr_max = 16;
-      const ZyanUSize instr_len = instruction.info.length;
 
-      for (ZyanU8 i = 0; i < instr_len; ++i) {
-        printf("%02X", code_mem[offset + i]);
-      }
-      for (ZyanUSize i = 0; i < instr_max - instr_len; ++i) {
-        printf("  ");
-      }
-      printf(" %s\n", instruction.text);
-      offset += instruction.info.length;
-      runtime_address += instruction.info.length;
-    }
+    Disasm(code, co_code, code_buf, code_mem, code_ptr, code_addr, n_op);
   }
   if (compile_success) {
     PyObject *(*func)() = reinterpret_cast<PyObject *(*)()>(code_mem);
     auto result = func();
-    LOG(INFO) << LOG_SHOW(result);
+    LOG(INFO) << "Result of execution of JITed function: " << result;
     munmap(code_mem, CODE_AREA_SIZE);
     // TODO: Delete this
     Py_INCREF(result);

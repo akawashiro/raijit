@@ -1,5 +1,14 @@
 # raijit
 
+## CPython 3.12 reading memo
+- Python/generated_cases.c.h に各オペコードの実行がある
+
+## Other JIT Compiler
+- https://github.com/tonybaloney/Pyjion
+- https://github.com/google-deepmind/s6
+    - https://github.com/google-deepmind/s6#richards
+
+
 ## TODO
 - Run [pyperformance](https://github.com/python/pyperformance).
 

@@ -252,13 +252,30 @@ uint8_t *WriteCmpRaxImm8(uint8_t *addr, uint8_t imm8) {
   return p + 4;
 }
 
-uint8_t *WriteJeRel32(uint8_t *addr, int32_t rel32) {
+uint8_t *WriteJzRel32(uint8_t *addr, int32_t rel32) {
   uint8_t *p = (uint8_t *)addr;
   // je rel32
   p[0] = 0x0f;
   p[1] = 0x84;
   memcpy(p + 2, &rel32, 4);
   return p + 6;
+}
+
+uint8_t *WriteJnzRel32(uint8_t *addr, int32_t rel32) {
+  uint8_t *p = (uint8_t *)addr;
+  // jnz rel32
+  p[0] = 0x0f;
+  p[1] = 0x85;
+  memcpy(p + 2, &rel32, 4);
+  return p + 6;
+}
+
+uint8_t *WriteJmpRel32(uint8_t *addr, int32_t rel32) {
+  uint8_t *p = (uint8_t *)addr;
+  // jmp rel32
+  p[0] = 0xe9;
+  memcpy(p + 1, &rel32, 4);
+  return p + 5;
 }
 
 uint8_t *WriteSoftwareBreakpoint(uint8_t *addr) {
