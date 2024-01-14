@@ -5,10 +5,10 @@
 #include <cstdint>
 
 // C++
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <map>
-#include <filesystem>
 
 // Python related includes
 #include <Python.h>
@@ -20,10 +20,10 @@
 #include <opcode.h>
 
 // Raijit includes
+#include "disasm.h"
 #include "log.h"
 #include "opcode_table.h"
 #include "write_insts.h"
-#include "disasm.h"
 
 void PrintPyObject(PyObject *v) {
   if (PyLong_Check(v)) {
@@ -368,7 +368,8 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
           global = PyDict_GetItem(interpreter_frame->f_builtins, name);
         }
         CHECK_NOTNULL(global);
-        LOG(INFO) << "LOAD_GLOBAL: " << PyUnicode_AsUTF8(name) << LOG_SHOW(global);
+        LOG(INFO) << "LOAD_GLOBAL: " << PyUnicode_AsUTF8(name)
+                  << LOG_SHOW(global);
         code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(global));
         code_ptr = WritePushRax(code_ptr);
         break;
@@ -447,10 +448,40 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
       }
       case FOR_ITER: {
         // https://github.com/python/cpython/blob/4259acd39464b292075f75b7604535cb6158c25b/Python/generated_cases.c.h#L3260-L3301
-        LOG(FATAL) << "FOR_ITER";
+        code_ptr = WritePopRdi(code_ptr);
+        code_ptr = WritePushRdi(code_ptr);
+        code_ptr =
+            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyIter_Next));
+        code_ptr = WriteCallRax(code_ptr);
+        code_ptr = WritePushRax(code_ptr);
+        code_ptr = WriteCmpRaxImm8(code_ptr, 0);
+
+        // Jump to END_FOR when iter_next returns NULL.
+        code_ptr = WriteJzRel32(code_ptr, rel32_dummy_value);
+        reloc_patch.emplace_back(RelocPatch{
+            .addr = code_ptr - 4,
+            .cur_op_index = op_index,
+            .jump_op_index = op_index + oprand + 2, // TODO: Check this.
+            .addend = static_cast<int32_t>(code_op_head - code_ptr),
+        });
+        break;
       }
       case END_FOR: {
-        LOG(FATAL) << "END_FOR";
+        // https://github.com/python/cpython/blob/4259acd39464b292075f75b7604535cb6158c25b/Python/generated_cases.c.h#L271-L288
+        // TODO: Decrease refcount of iter.
+        code_ptr = WritePopRax(code_ptr);
+        code_ptr = WritePopRax(code_ptr);
+        break;
+      }
+      case JUMP_BACKWARD: {
+        code_ptr = WriteJmpRel32(code_ptr, rel32_dummy_value);
+        reloc_patch.emplace_back(RelocPatch{
+            .addr = code_ptr - 4,
+            .cur_op_index = op_index,
+            .jump_op_index = op_index - oprand + 1,
+            .addend = static_cast<int32_t>(code_op_head - code_ptr),
+        });
+        break;
       }
       case BINARY_OP_ADD_INT: {
         code_ptr = WritePopRsi(code_ptr);
@@ -553,7 +584,7 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(IsPyTrue));
         code_ptr = WriteCallRax(code_ptr);
         code_ptr = WriteCmpRaxImm8(code_ptr, 0);
-        code_ptr = WriteJeRel32(code_ptr, rel32_dummy_value);
+        code_ptr = WriteJzRel32(code_ptr, rel32_dummy_value);
         CHECK_LE(std::numeric_limits<int32_t>::min(), code_op_head - code_ptr);
         CHECK_LE(code_op_head - code_ptr, std::numeric_limits<int32_t>::max());
         reloc_patch.emplace_back(RelocPatch{
