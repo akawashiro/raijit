@@ -500,6 +500,7 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         break;
       }
       case COMPARE_OP: {
+        // TODO: Rewrite using PyObject_RichCompare.
         static std::map<uint8_t, uint64_t> oprand_to_func = {
             {Py_GT, reinterpret_cast<uint64_t>(PyLongGT)},
             {Py_EQ, reinterpret_cast<uint64_t>(PyLongEQ)},
@@ -509,8 +510,8 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         code_ptr = WritePopRsi(code_ptr);
         code_ptr = WritePopRdi(code_ptr);
         if (!oprand_to_func.contains(oprand >> 4)) {
-          LOG(FATAL) << "UNKNOWN" << LOG_SHOW(int(opcode))
-                     << LOG_SHOW(int(oprand));
+          LOG(FATAL) << "UNKNOWN operand for COMPARE_OP"
+                     << LOG_SHOW(int(oprand)) << LOG_SHOW(int(oprand >> 4));
           compile_success = false;
           break;
         } else {
