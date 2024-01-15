@@ -29,6 +29,7 @@ const auto WritePush1stArg = WritePushRdi;
 // Imm
 uint8_t *WriteMovTo1stArgFromImm(uint8_t *addr, uint64_t value);
 uint8_t *WriteMovTo2ndArgFromImm(uint8_t *addr, uint64_t value);
+uint8_t* WriteMovTo3rdArgFromImm(uint8_t* addr, uint64_t value);
 
 // Jump
 uint8_t *WriteJzRel32(uint8_t *addr, int32_t rel32);
