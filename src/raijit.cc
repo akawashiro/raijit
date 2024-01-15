@@ -138,7 +138,7 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
   LOG(INFO) << "Compiling a function " << func_name;
 
   // PyFrameObject *f = PyThreadState_GetFrame(ts);
-  const int CODE_AREA_SIZE = 4096;
+  const int CODE_AREA_SIZE = 4096 * 4;
   uint8_t *code_mem = reinterpret_cast<uint8_t *>(
       mmap(NULL, CODE_AREA_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC,
            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
@@ -157,6 +157,8 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
   {
     const char *code_buf = PyBytes_AsString(co_code);
     for (size_t op_index = 0; op_index < n_op; op_index++) {
+      CHECK_LE(code_ptr, code_mem + CODE_AREA_SIZE);
+
       code_addr.emplace_back(code_ptr);
       const uint8_t *code_op_head = code_ptr;
       const uint8_t opcode = code_buf[op_index * 2];
@@ -446,6 +448,11 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         code_ptr = WritePushRdi(code_ptr);
         break;
       }
+      case COPY: {
+        code_ptr = WriteMovToRdiFromQwordPtrRspOffset(code_ptr, -oprand);
+        code_ptr = WritePushRdi(code_ptr);
+        break;
+      }
       case FOR_ITER: {
         // https://github.com/python/cpython/blob/4259acd39464b292075f75b7604535cb6158c25b/Python/generated_cases.c.h#L3260-L3301
         code_ptr = WritePopRdi(code_ptr);
@@ -619,6 +626,7 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
       }
     }
   }
+
   for (const auto &rp : reloc_patch) {
     int32_t *p = reinterpret_cast<int32_t *>(rp.addr);
     int32_t v =

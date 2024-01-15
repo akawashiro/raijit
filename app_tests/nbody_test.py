@@ -1,7 +1,7 @@
 import random
 import dis
 
-def nbody():
+def raijit_test_nbody():
     random.seed(42)
     N = 3
     ITERATIONS = 10
@@ -30,13 +30,13 @@ def nbody():
                     pos[k][2] += mass_j * dz / d
     return pos
 
-dis.dis(nbody)
+dis.dis(raijit_test_nbody)
 
-pos1 = nbody()
+pos1 = raijit_test_nbody()
 
 import raijit
 raijit.enable()
-pos2 = nbody()
+pos2 = raijit_test_nbody()
 print(pos1)
 print(pos2)
 

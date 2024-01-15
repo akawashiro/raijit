@@ -36,6 +36,9 @@ uint8_t *WriteJzRel32(uint8_t *addr, int32_t rel32);
 uint8_t *WriteJnzRel32(uint8_t *addr, int32_t rel32);
 uint8_t *WriteJmpRel32(uint8_t *addr, int32_t rel32);
 
+// Stack
+uint8_t *WriteMovToRdiFromQwordPtrRspOffset(uint8_t *addr, int8_t offset);
+
 uint8_t *WriteLeave(uint8_t *addr);
 uint8_t *WriteRet(uint8_t *addr);
 uint8_t *WriteCallRax(uint8_t *addr);

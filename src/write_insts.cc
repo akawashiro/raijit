@@ -93,6 +93,17 @@ uint8_t *WriteMovTo1stArgFromR12(uint8_t *addr) {
   return p + 3;
 }
 
+uint8_t *WriteMovToRdiFromQwordPtrRspOffset(uint8_t *addr, int8_t offset) {
+  uint8_t *p = (uint8_t *)addr;
+  // mov rdi, QWORD PTR [rsp + offset]
+  p[0] = 0x48;
+  p[1] = 0x8b;
+  p[2] = 0x7c;
+  p[3] = 0x24;
+  p[4] = offset;
+  return p + 5;
+}
+
 uint8_t *WritePushR12(uint8_t *addr) {
   uint8_t *p = (uint8_t *)addr;
   // push r12
