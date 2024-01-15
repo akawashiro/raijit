@@ -7,4 +7,6 @@ def fib(n):
         return fib(n - 1) + fib(n - 2)
 
 raijit.enable()
+r = fib(11)
+raijit.disable()
 assert fib(11) == 89

@@ -29,11 +29,15 @@ const auto WritePush1stArg = WritePushRdi;
 // Imm
 uint8_t *WriteMovTo1stArgFromImm(uint8_t *addr, uint64_t value);
 uint8_t *WriteMovTo2ndArgFromImm(uint8_t *addr, uint64_t value);
+uint8_t* WriteMovTo3rdArgFromImm(uint8_t* addr, uint64_t value);
 
 // Jump
 uint8_t *WriteJzRel32(uint8_t *addr, int32_t rel32);
 uint8_t *WriteJnzRel32(uint8_t *addr, int32_t rel32);
 uint8_t *WriteJmpRel32(uint8_t *addr, int32_t rel32);
+
+// Stack
+uint8_t *WriteMovToRdiFromQwordPtrRspOffset(uint8_t *addr, int8_t offset);
 
 uint8_t *WriteLeave(uint8_t *addr);
 uint8_t *WriteRet(uint8_t *addr);

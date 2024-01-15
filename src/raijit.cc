@@ -138,7 +138,7 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
   LOG(INFO) << "Compiling a function " << func_name;
 
   // PyFrameObject *f = PyThreadState_GetFrame(ts);
-  const int CODE_AREA_SIZE = 4096;
+  const int CODE_AREA_SIZE = 4096 * 4;
   uint8_t *code_mem = reinterpret_cast<uint8_t *>(
       mmap(NULL, CODE_AREA_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC,
            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
@@ -157,6 +157,8 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
   {
     const char *code_buf = PyBytes_AsString(co_code);
     for (size_t op_index = 0; op_index < n_op; op_index++) {
+      CHECK_LE(code_ptr, code_mem + CODE_AREA_SIZE);
+
       code_addr.emplace_back(code_ptr);
       const uint8_t *code_op_head = code_ptr;
       const uint8_t opcode = code_buf[op_index * 2];
@@ -426,7 +428,7 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
           break;
         }
         default: {
-          LOG(FATAL) << "UNKNOWN" << LOG_SHOW(int(opcode))
+          LOG(FATAL) << "Unsupported number of arguments for CALL: "
                      << LOG_SHOW(int(oprand));
           compile_success = false;
           break;
@@ -443,6 +445,11 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         code_ptr = WritePopRax(code_ptr);
         code_ptr = WritePopRdi(code_ptr);
         code_ptr = WritePushRax(code_ptr);
+        code_ptr = WritePushRdi(code_ptr);
+        break;
+      }
+      case COPY: {
+        code_ptr = WriteMovToRdiFromQwordPtrRspOffset(code_ptr, -oprand);
         code_ptr = WritePushRdi(code_ptr);
         break;
       }
@@ -500,22 +507,13 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         break;
       }
       case COMPARE_OP: {
-        static std::map<uint8_t, uint64_t> oprand_to_func = {
-            {Py_GT, reinterpret_cast<uint64_t>(PyLongGT)},
-            {Py_EQ, reinterpret_cast<uint64_t>(PyLongEQ)},
-            {Py_LE, reinterpret_cast<uint64_t>(PyLongLE)},
-        };
+        CHECK_LE(oprand >> 4, Py_GE);
 
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        if (!oprand_to_func.contains(oprand >> 4)) {
-          LOG(FATAL) << "UNKNOWN" << LOG_SHOW(int(opcode))
-                     << LOG_SHOW(int(oprand));
-          compile_success = false;
-          break;
-        } else {
-          code_ptr = WriteMovRax(code_ptr, oprand_to_func[oprand >> 4]);
-        }
+        code_ptr = WritePop2ndArg(code_ptr);
+        code_ptr = WritePop1stArg(code_ptr);
+        code_ptr = WriteMovTo3rdArgFromImm(code_ptr, oprand >> 4);
+        code_ptr = WriteMovRax(
+            code_ptr, reinterpret_cast<uint64_t>(PyObject_RichCompare));
         code_ptr = WriteCallRax(code_ptr);
         code_ptr = WritePushRax(code_ptr);
         break;
@@ -578,13 +576,18 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         code_ptr = WritePopRax(code_ptr);
         break;
       }
-      case POP_JUMP_IF_FALSE: {
+      case POP_JUMP_IF_FALSE:
+      case POP_JUMP_IF_TRUE: {
         code_ptr = WritePopRdi(code_ptr);
         // code_ptr = WriteSoftwareBreakpoint(code_ptr);
         code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(IsPyTrue));
         code_ptr = WriteCallRax(code_ptr);
         code_ptr = WriteCmpRaxImm8(code_ptr, 0);
-        code_ptr = WriteJzRel32(code_ptr, rel32_dummy_value);
+        if (opcode == POP_JUMP_IF_TRUE) {
+          code_ptr = WriteJnzRel32(code_ptr, rel32_dummy_value);
+        } else {
+          code_ptr = WriteJzRel32(code_ptr, rel32_dummy_value);
+        }
         CHECK_LE(std::numeric_limits<int32_t>::min(), code_op_head - code_ptr);
         CHECK_LE(code_op_head - code_ptr, std::numeric_limits<int32_t>::max());
         reloc_patch.emplace_back(RelocPatch{
@@ -623,6 +626,7 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
       }
     }
   }
+
   for (const auto &rp : reloc_patch) {
     int32_t *p = reinterpret_cast<int32_t *>(rp.addr);
     int32_t v =
