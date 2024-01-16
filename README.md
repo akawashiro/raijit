@@ -6,6 +6,9 @@
 
 ## TODO
 - Run [pyperformance](https://github.com/python/pyperformance).
+- Make raijit the fastest CPython JIT compiler in the world.
+    - Benchmark is [pyperformance](https://github.com/python/pyperformance).
+    - Platform is Linux on x86-64.
 - You can list up all unimplemented opcodes using `./scripts/list_up_unimplmented_ops.sh`.
 
 ## How to build
