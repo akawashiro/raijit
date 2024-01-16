@@ -1,6 +1,7 @@
 #include "disasm.h"
 
 // C++ includes
+#include <chrono>
 #include <fstream>
 #include <iostream>
 
@@ -12,12 +13,24 @@
 #include "opcode_table.h"
 
 void Disasm(const PyCodeObject *code, const PyObject *co_code,
-                             const char *code_buf, const uint8_t *code_mem,
-                             const uint8_t *code_ptr,
-                             const std::vector<uint8_t *>& code_addr,
-                             const size_t n_op){
-  auto disasm_file = std::filesystem::temp_directory_path() /
-                     (std::string("raijit_disasm_") + std::to_string(rand()));
+            const char *code_buf, const uint8_t *code_mem,
+            const uint8_t *code_ptr, const std::vector<uint8_t *> &code_addr,
+            const size_t n_op) {
+  const std::string func_name = PyUnicode_AsUTF8(code->co_name);
+  const std::string now_str =
+      std::to_string(duration_cast<std::chrono::milliseconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count());
+  const auto disasm_file =
+      std::filesystem::temp_directory_path() /
+      (std::string("raijit_disasm_") + func_name + "_" + now_str);
+  const auto disasm_sym = std::filesystem::temp_directory_path() /
+                          (std::string("raijit_disasm_") + func_name);
+
+  if(std::filesystem::exists(disasm_sym)) {
+    std::filesystem::remove(disasm_sym);
+  }
+  std::filesystem::create_symlink(disasm_file, disasm_sym);
 
   ZyanU64 runtime_address = reinterpret_cast<ZyanU64>(code_mem);
   // Loop over the instructions in our buffer.
@@ -29,7 +42,8 @@ void Disasm(const PyCodeObject *code, const PyObject *co_code,
   while (ZYAN_SUCCESS(ZydisDisassembleIntel(
       /* machine_mode:    */ ZYDIS_MACHINE_MODE_LONG_64,
       /* runtime_address: */ runtime_address,
-      /* buffer:          */ reinterpret_cast<const ZyanU8 *>(code_mem) + offset,
+      /* buffer:          */ reinterpret_cast<const ZyanU8 *>(code_mem) +
+          offset,
       // /* length:          */ CODE_AREA_SIZE - offset,
       /* length:          */ code_ptr - code_mem - offset,
       /* instruction:     */ &instruction))) {
