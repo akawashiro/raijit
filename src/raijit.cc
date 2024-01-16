@@ -526,7 +526,6 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
             {NB_XOR, reinterpret_cast<uint64_t>(PyNumber_Xor)},
             {NB_TRUE_DIVIDE, reinterpret_cast<uint64_t>(PyNumber_TrueDivide)},
             {NB_FLOOR_DIVIDE, reinterpret_cast<uint64_t>(PyNumber_FloorDivide)},
-            {NB_POWER, reinterpret_cast<uint64_t>(PyNumber_Power)},
             {NB_LSHIFT, reinterpret_cast<uint64_t>(PyNumber_Lshift)},
             {NB_RSHIFT, reinterpret_cast<uint64_t>(PyNumber_Rshift)},
             {NB_MULTIPLY, reinterpret_cast<uint64_t>(PyNumber_Multiply)},
@@ -558,15 +557,17 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
              reinterpret_cast<uint64_t>(PyNumber_InPlaceSubtract)},
         };
 
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        if (!oprand_to_func.contains(oprand)) {
-          LOG(FATAL) << "UNKNOWN" << LOG_SHOW(int(opcode))
-                     << LOG_SHOW(int(oprand));
+        code_ptr = WritePop2ndArg(code_ptr);
+        code_ptr = WritePop1stArg(code_ptr);
+        if (oprand_to_func.contains(oprand)) {
+          code_ptr = WriteMovRax(code_ptr, oprand_to_func[oprand]);
+        } else if (oprand == NB_POWER) {
+            code_ptr =WriteMovTo3rdArgFromImm(code_ptr, reinterpret_cast<uint64_t>(Py_None));
+          code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyNumber_Power));
+        } else {
+          LOG(FATAL) << "UNKNOWN BINARY_OP" << LOG_SHOW(int(oprand));
           compile_success = false;
           break;
-        } else {
-          code_ptr = WriteMovRax(code_ptr, oprand_to_func[oprand]);
         }
         code_ptr = WriteCallRax(code_ptr);
         code_ptr = WritePushRax(code_ptr);
