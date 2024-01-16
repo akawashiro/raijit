@@ -22,3 +22,4 @@ ${PYTHON_BINARY} ./opcode_tests/inplace.py
 ${PYTHON_BINARY} ./opcode_tests/map.py
 ${PYTHON_BINARY} ./opcode_tests/misc.py
 ${PYTHON_BINARY} ./opcode_tests/for.py
+${PYTHON_BINARY} ./opcode_tests/subscr.py

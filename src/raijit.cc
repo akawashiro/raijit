@@ -238,10 +238,10 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         break;
       }
       case BINARY_SUBSCR: {
-        code_ptr = WritePopRsi(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
+        code_ptr = WritePop2ndArg(code_ptr);
+        code_ptr = WritePop1stArg(code_ptr);
         code_ptr =
-            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyDict_GetItem));
+            WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyObject_GetItem));
         code_ptr = WriteCallRax(code_ptr);
         code_ptr = WritePushRax(code_ptr);
         break;
