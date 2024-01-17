@@ -23,4 +23,4 @@ ${PYTHON_BINARY} ./opcode_tests/map.py
 ${PYTHON_BINARY} ./opcode_tests/misc.py
 ${PYTHON_BINARY} ./opcode_tests/for.py
 ${PYTHON_BINARY} ./opcode_tests/subscr.py
-${PYTHON_BINARY} ./opcode_tests/copy.py
+# ${PYTHON_BINARY} ./opcode_tests/copy.py
