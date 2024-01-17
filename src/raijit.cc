@@ -442,14 +442,29 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         break;
       }
       case SWAP: {
-        code_ptr = WritePopRax(code_ptr);
-        code_ptr = WritePopRdi(code_ptr);
-        code_ptr = WritePushRax(code_ptr);
-        code_ptr = WritePushRdi(code_ptr);
-        break;
+        if (oprand == 2) {
+          code_ptr = WritePopRax(code_ptr);
+          code_ptr = WritePopRdi(code_ptr);
+          code_ptr = WritePushRax(code_ptr);
+          code_ptr = WritePushRdi(code_ptr);
+          break;
+        } else if (oprand == 3) {
+          code_ptr = WritePopRax(code_ptr);
+          code_ptr = WritePopRdi(code_ptr);
+          code_ptr = WritePopRsi(code_ptr);
+          code_ptr = WritePushRax(code_ptr);
+          code_ptr = WritePushRdi(code_ptr);
+          code_ptr = WritePushRsi(code_ptr);
+          break;
+        } else {
+          LOG(FATAL) << "Unsupported number of arguments for SWAP: "
+                     << LOG_SHOW(int(oprand));
+          compile_success = false;
+          break;
+        }
       }
       case COPY: {
-        code_ptr = WriteMovToRdiFromQwordPtrRspOffset(code_ptr, -oprand);
+        code_ptr = WriteMovToRdiFromQwordPtrRspOffset(code_ptr, oprand * 8);
         code_ptr = WritePushRdi(code_ptr);
         break;
       }
@@ -562,8 +577,10 @@ PyObject *RaijitEvalFrame(PyThreadState *ts,
         if (oprand_to_func.contains(oprand)) {
           code_ptr = WriteMovRax(code_ptr, oprand_to_func[oprand]);
         } else if (oprand == NB_POWER) {
-            code_ptr =WriteMovTo3rdArgFromImm(code_ptr, reinterpret_cast<uint64_t>(Py_None));
-          code_ptr = WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyNumber_Power));
+          code_ptr = WriteMovTo3rdArgFromImm(
+              code_ptr, reinterpret_cast<uint64_t>(Py_None));
+          code_ptr =
+              WriteMovRax(code_ptr, reinterpret_cast<uint64_t>(PyNumber_Power));
         } else {
           LOG(FATAL) << "UNKNOWN BINARY_OP" << LOG_SHOW(int(oprand));
           compile_success = false;
